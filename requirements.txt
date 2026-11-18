@@ -1,0 +1,24 @@
+# ==============================================================================
+# Handwriting Automator Requirements
+# Supported on Windows (x64) and Linux (x86_64 / aarch64)
+# Python 3.10, 3.11, or 3.12 recommended
+# ==============================================================================
+
+# Core Deep Learning & Generative Models
+diffusers>=0.27.0
+transformers>=4.38.0
+accelerate>=0.28.0
+huggingface_hub>=0.23.0
+
+# Document Analysis, OCR & Vision
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0; sys_platform == 'linux'
+paddlepaddle==2.6.2; sys_platform == 'win32'
+PyMuPDF>=1.23.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+
+# Mathematics & Utilities
+numpy>=1.24.0,<2.0.0
+scipy>=1.11.0
+tqdm>=4.66.0

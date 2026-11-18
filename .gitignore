@@ -1,0 +1,93 @@
+# ==============================================================================
+# Git Ignore Configuration for Handwriting Automator
+# ==============================================================================
+
+# --- Python Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Bytecode & Build Artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Deep Learning Model Weights & Checkpoints (>100MB Hugging Face weights) ---
+# Note: Use `python download_weights.py` after cloning to fetch these automatically.
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.ckpt
+DiffusionPen/diffusionpen_iam_model_path/
+DiffusionPen/stable-diffusion-v1-5/
+DiffusionPen/finetuned_diffusionpen/
+DiffusionPen/style_models/*.pth
+
+# --- Caches & Logging ---
+.cache/
+*.cache
+.pytest_cache/
+.coverage
+htmlcov/
+wandb/
+.paddleocr/
+.paddlex/
+*.log
+
+# --- Scratch & Temporary Experimentation Files ---
+scratch/
+installed_packages.txt
+
+# --- User Data, Inputs & Outputs (Preserve folder structure via .gitkeep) ---
+data/raw_assignments/*
+!data/raw_assignments/.gitkeep
+
+data/blank_templates/*
+!data/blank_templates/.gitkeep
+
+data/processed_dataset/*
+!data/processed_dataset/.gitkeep
+
+data/user_glyphs/*
+!data/user_glyphs/.gitkeep
+
+input_pdfs/*
+!input_pdfs/.gitkeep
+
+output_pages/*
+!output_pages/.gitkeep
+
+# --- IDEs, Operating System & Editor Files ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
