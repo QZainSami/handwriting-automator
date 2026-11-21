@@ -2,15 +2,17 @@
 """
 3_render_on_template.py
 
-Authentic Personal Handwriting & Notebook Page Compositing Pipeline:
+Authentic Personal Handwriting & Dual-Page Notebook Compositing Pipeline:
 1. Automatically discovers input document (PDF, TXT, MD) in input_pdfs/ (e.g. assig.txt).
 2. Uses the user's authentic personal handwriting glyph library (royal blue ballpoint ink,
-   custom letterforms, all 3 variations of lowercase 'r': print, hooked, and cursive flat-top).
-3. Automatically detects horizontal ruled lines and margins on blank notebook page photos
-   (skipping the printed top 'Date: ...' header).
-4. Alternates seamlessly between Left and Right notebook pages (left_page <-> right_page).
-5. Adds subtle human micro-variations (baseline jitter, rotation jitter, natural kerning).
-6. Compiles final output into output_pages/final_handwritten.pdf and individual page images.
+   custom letterforms, all 3 variations of lowercase 'r': print, hook, and cursive).
+3. Multi-variant glyph engine to prevent clone repetition of repeated letters (ee, tt, oo, ll).
+4. Physical ink-paper Multiply blending (ruled lines and paper fibers show naturally through ink).
+5. Organic left margin drift and smart end-of-line margin squeezing.
+6. Auto-filled handwritten Date headers on printed notebook template lines.
+7. Freehand organic ballpoint underlines under major section headings.
+8. Alternates seamlessly between Left and Right notebook pages (clearing spiral binding).
+9. Compiles final output into output_pages/final_handwritten.pdf and individual page images.
 """
 
 import os
@@ -20,6 +22,7 @@ import math
 import random
 import argparse
 from pathlib import Path
+from collections import defaultdict
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageOps
@@ -109,18 +112,105 @@ def extract_content_lines(doc_path: Path) -> list:
     return lines
 
 
+def blend_ink_onto_page(page_arr: np.ndarray, ink_img: Image.Image, x: int, y: int):
+    """
+    Physically blends translucent ballpoint ink onto notebook paper.
+    Paper fibers, texture, and ruled notebook lines naturally show through
+    the translucent royal blue dye, eliminating artificial opaque cutout edges.
+    Boundary safe with sub-pixel integer clipping.
+    """
+    if ink_img is None:
+        return
+
+    gw, gh = ink_img.size
+    page_h, page_w = page_arr.shape[:2]
+
+    x1 = max(0, x)
+    y1 = max(0, y)
+    x2 = min(page_w, x + gw)
+    y2 = min(page_h, y + gh)
+
+    if x1 >= x2 or y1 >= y2:
+        return
+
+    gx1 = x1 - x
+    gy1 = y1 - y
+    gx2 = gx1 + (x2 - x1)
+    gy2 = gy1 + (y2 - y1)
+
+    ink_arr = np.array(ink_img)[gy1:gy2, gx1:gx2]
+    alpha = ink_arr[:, :, 3:4].astype(float) / 255.0
+    if not np.any(alpha > 0.02):
+        return
+
+    ink_rgb = ink_arr[:, :, :3].astype(float)
+    bg_rgb = page_arr[y1:y2, x1:x2].astype(float)
+
+    # Physical ballpoint Multiply blending formula:
+    # (bg * ink) / 255.0 lets paper fibers and ruled lines show naturally through the dye
+    mult_rgb = (bg_rgb * ink_rgb) / 255.0 * 1.12
+    blended = np.clip(bg_rgb * (1.0 - alpha) + mult_rgb * alpha, 0, 255).astype(np.uint8)
+    page_arr[y1:y2, x1:x2] = blended
+
+
+def draw_handwritten_underline(page_arr: np.ndarray, x1: int, x2: int, y: int, slope: float = 0.0):
+    """
+    Draws a natural, freehand royal blue ballpoint underline under major headings.
+    Features organic pressure taper, subtle curvature/sag, micro-jitter, and physical multiply blending.
+    """
+    length = x2 - x1
+    if length <= 15:
+        return
+
+    num_pts = max(15, length // 12)
+    xs = np.linspace(x1, x2, num_pts)
+    sag_depth = random.uniform(1.2, 3.2)
+    ys = []
+    for i, x in enumerate(xs):
+        t = (x - x1) / float(length)
+        curve_y = 4.0 * sag_depth * t * (1.0 - t)
+        jitter_y = random.uniform(-0.5, 0.5)
+        slope_y = slope * (x - x1)
+        ys.append(y + curve_y + slope_y + jitter_y)
+
+    pad = 15
+    min_x, max_x = int(min(xs)) - pad, int(max(xs)) + pad
+    min_y, max_y = int(min(ys)) - pad, int(max(ys)) + pad
+    cw = max_x - min_x
+    ch = max_y - min_y
+
+    stroke_canvas = np.zeros((ch, cw, 4), dtype=np.uint8)
+    blue_ink = (32, 75, 215)  # RGB royal blue ballpoint
+
+    pts = list(zip(xs - min_x, np.array(ys) - min_y))
+    for i in range(len(pts) - 1):
+        pt1 = (int(round(pts[i][0])), int(round(pts[i][1])))
+        pt2 = (int(round(pts[i + 1][0])), int(round(pts[i + 1][1])))
+        t = i / float(len(pts))
+        pressure = math.sin(t * math.pi) ** 0.6
+        thickness = max(2, int(round(2.0 + 1.8 * pressure)))
+        alpha_val = int(round(160 + 85 * pressure))
+
+        cv2.line(stroke_canvas, pt1, pt2, (*blue_ink, alpha_val), thickness, cv2.LINE_AA)
+
+    stroke_img = Image.fromarray(stroke_canvas, mode="RGBA")
+    blend_ink_onto_page(page_arr, stroke_img, min_x, min_y)
+
+
 class AuthenticHandwritingEngine:
     """
     Personal handwriting generation engine using authentic royal blue ballpoint pen glyphs
     extracted directly from the user's handwriting specimen.
+    Supports multi-variant selection to prevent identical cloned letters (ee, tt, oo, ll).
     """
     def __init__(self, glyph_base_dir: Path = GLYPH_DIR, r_mode: str = "mix"):
         self.glyph_base_dir = Path(glyph_base_dir)
         self.r_mode = r_mode
-        self.upper_glyphs = {}
-        self.lower_glyphs = {}
-        self.digit_glyphs = {}
-        self.symbol_glyphs = {}
+        self.upper_glyphs = defaultdict(list)
+        self.lower_glyphs = defaultdict(list)
+        self.digit_glyphs = defaultdict(list)
+        self.symbol_glyphs = defaultdict(list)
+        self.last_used_indices = defaultdict(int)
         self.load_glyphs()
 
         # Descender fraction below baseline
@@ -148,7 +238,8 @@ class AuthenticHandwritingEngine:
             ":": "colon", ";": "semicolon", "-": "minus", "_": "minus",
             "+": "plus", "=": "equal", "/": "slash", "(": "lparen",
             ")": "rparen", "%": "percent", "$": "dollar", "\"": "quote",
-            "'": "squote", "•": "bullet", "*": "bullet", "—": "dash"
+            "'": "squote", "•": "bullet", "*": "bullet", "—": "dash",
+            "[": "bracket_l", "]": "bracket_r", "#": "hashtag", "@": "at"
         }
 
         self.r_variants = ["r_print", "r_hook", "r_cursive"]
@@ -160,26 +251,81 @@ class AuthenticHandwritingEngine:
         sym_dir = self.glyph_base_dir / "symbols"
 
         if upper_dir.exists():
-            for p in upper_dir.glob("*.png"):
-                self.upper_glyphs[p.stem] = Image.open(p).convert("RGBA")
+            for p in sorted(upper_dir.glob("*.png")):
+                img = Image.open(p).convert("RGBA")
+                stem = p.stem
+                base = stem.split("_")[0]
+                self.upper_glyphs[base].append(img)
+                if stem != base:
+                    self.upper_glyphs[stem].append(img)
+
         if lower_dir.exists():
-            for p in lower_dir.glob("*.png"):
-                self.lower_glyphs[p.stem] = Image.open(p).convert("RGBA")
+            for p in sorted(lower_dir.glob("*.png")):
+                img = Image.open(p).convert("RGBA")
+                stem = p.stem
+                if stem.startswith("r_"):
+                    self.lower_glyphs[stem].append(img)
+                    self.lower_glyphs["r"].append(img)
+                else:
+                    base = stem.split("_")[0]
+                    self.lower_glyphs[base].append(img)
+                    if stem != base:
+                        self.lower_glyphs[stem].append(img)
+
         if digit_dir.exists():
-            for p in digit_dir.glob("*.png"):
-                self.digit_glyphs[p.stem] = Image.open(p).convert("RGBA")
+            for p in sorted(digit_dir.glob("*.png")):
+                img = Image.open(p).convert("RGBA")
+                stem = p.stem
+                base = stem.split("_")[0]
+                self.digit_glyphs[base].append(img)
+                if stem != base:
+                    self.digit_glyphs[stem].append(img)
+
         if sym_dir.exists():
-            for p in sym_dir.glob("*.png"):
-                self.symbol_glyphs[p.stem] = Image.open(p).convert("RGBA")
+            for p in sorted(sym_dir.glob("*.png")):
+                img = Image.open(p).convert("RGBA")
+                stem = p.stem
+                base = stem.split("_")[0]
+                self.symbol_glyphs[base].append(img)
+                if stem != base:
+                    self.symbol_glyphs[stem].append(img)
 
-        total = len(self.upper_glyphs) + len(self.lower_glyphs) + len(self.digit_glyphs) + len(self.symbol_glyphs)
-        print(f"[Handwriting Engine] Loaded {total} authentic user glyphs (Royal Blue Ballpoint Ink).")
-        print(f"  - Uppercase letters : {len(self.upper_glyphs)} (A-Z)")
-        print(f"  - Lowercase letters : {len(self.lower_glyphs)} (a-z + 3 'r' styles)")
-        print(f"  - Digits            : {len(self.digit_glyphs)} (0-9)")
-        print(f"  - Symbols           : {len(self.symbol_glyphs)}")
+        total_u = sum(len(v) for v in self.upper_glyphs.values())
+        total_l = sum(len(v) for v in self.lower_glyphs.values())
+        total_d = sum(len(v) for v in self.digit_glyphs.values())
+        total_s = sum(len(v) for v in self.symbol_glyphs.values())
 
-    def get_char_glyph(self, ch: str, r_choice: str = None) -> tuple:
+        print(f"[Handwriting Engine] Loaded {total_u + total_l + total_d + total_s} authentic user glyph variants (Royal Blue Ballpoint Ink).")
+        print(f"  - Uppercase letters : {len(self.upper_glyphs)} classes | {total_u} total variants")
+        print(f"  - Lowercase letters : {len(self.lower_glyphs)} classes | {total_l} total variants (including 3 'r' styles)")
+        print(f"  - Digits            : {len(self.digit_glyphs)} classes | {total_d} total variants")
+        print(f"  - Symbols           : {len(self.symbol_glyphs)} classes | {total_s} total variants")
+
+    def _pick_variant(self, glyph_list: list, key: str, is_repeated: bool = False) -> Image.Image:
+        """Picks a variant from glyph_list, cycling variants and avoiding identical repeats."""
+        if not glyph_list:
+            return None
+
+        if len(glyph_list) == 1:
+            img = glyph_list[0]
+            if is_repeated:
+                # Organic micro-variation for single-variant repeated characters (e.g. 'mm')
+                w, h = img.size
+                scale_w = random.uniform(0.96, 1.04)
+                scale_h = random.uniform(0.97, 1.03)
+                nw, nh = max(2, int(round(w * scale_w))), max(2, int(round(h * scale_h)))
+                img = img.resize((nw, nh), Image.BICUBIC)
+                rot = random.uniform(-0.5, 0.5)
+                img = img.rotate(rot, resample=Image.BICUBIC, expand=True)
+            return img
+
+        # Multiple physical variants available on disk
+        last_idx = self.last_used_indices[key]
+        next_idx = (last_idx + 1) % len(glyph_list)
+        self.last_used_indices[key] = next_idx
+        return glyph_list[next_idx]
+
+    def get_char_glyph(self, ch: str, r_choice: str = None, is_repeated: bool = False) -> tuple:
         """Returns (PIL.Image, descender_ratio, high_ratio)."""
         if ch == "r":
             if self.r_mode == "print":
@@ -190,36 +336,44 @@ class AuthenticHandwritingEngine:
                 choice = "r_cursive"
             else:
                 choice = r_choice if r_choice in self.r_variants else random.choice(self.r_variants)
-            img = self.lower_glyphs.get(choice, self.lower_glyphs.get("r"))
+            
+            cand = self.lower_glyphs.get(choice) or self.lower_glyphs.get("r")
+            img = self._pick_variant(cand, "r", is_repeated=is_repeated)
             return img, 0.0, 0.0
 
         if ch in self.punct_map:
             key = self.punct_map[ch]
-            img = self.symbol_glyphs.get(key)
-            if img:
+            cand = self.symbol_glyphs.get(key)
+            if cand:
+                img = self._pick_variant(cand, key, is_repeated=is_repeated)
                 return img, self.descenders.get(ch, 0.0), self.high_puncts.get(ch, 0.0)
 
         if ch.isupper() and ch in self.upper_glyphs:
-            return self.upper_glyphs[ch], 0.0, 0.0
+            img = self._pick_variant(self.upper_glyphs[ch], ch, is_repeated=is_repeated)
+            return img, 0.0, 0.0
 
         if ch.islower() and ch in self.lower_glyphs:
-            return self.lower_glyphs[ch], self.descenders.get(ch, 0.0), 0.0
+            img = self._pick_variant(self.lower_glyphs[ch], ch, is_repeated=is_repeated)
+            return img, self.descenders.get(ch, 0.0), 0.0
 
         if ch.isdigit() and ch in self.digit_glyphs:
-            return self.digit_glyphs[ch], 0.0, 0.0
+            img = self._pick_variant(self.digit_glyphs[ch], ch, is_repeated=is_repeated)
+            return img, 0.0, 0.0
 
         # Case fallbacks
         if ch.upper() in self.upper_glyphs:
-            return self.upper_glyphs[ch.upper()], 0.0, 0.0
+            img = self._pick_variant(self.upper_glyphs[ch.upper()], ch.upper(), is_repeated=is_repeated)
+            return img, 0.0, 0.0
         if ch.lower() in self.lower_glyphs:
-            return self.lower_glyphs[ch.lower()], self.descenders.get(ch.lower(), 0.0), 0.0
+            img = self._pick_variant(self.lower_glyphs[ch.lower()], ch.lower(), is_repeated=is_repeated)
+            return img, self.descenders.get(ch.lower(), 0.0), 0.0
 
         return None, 0.0, 0.0
 
     def render_word(self, word: str, target_cap_height: int = 110, line_slope: float = 0.0, jitter: bool = True) -> tuple:
         """
         Renders a single handwritten word with authentic glyphs and natural handwriting flow.
-        Follows the local notebook line slope so every character sits flush on the ruled line.
+        Follows local notebook line slope so every character sits flush on the ruled line.
         Returns (PIL.Image RGBA, baseline_y_at_start).
         """
         if not word:
@@ -235,13 +389,16 @@ class AuthenticHandwritingEngine:
         max_above = 0
         max_below = 0
 
+        prev_ch = None
         for ch in word:
-            g_img, desc_ratio, high_ratio = self.get_char_glyph(ch, r_choice=word_r_choice)
+            is_repeated = (ch == prev_ch)
+            g_img, desc_ratio, high_ratio = self.get_char_glyph(ch, r_choice=word_r_choice, is_repeated=is_repeated)
+            prev_ch = ch
             if g_img is None:
                 continue
 
-            gw = max(2, int(g_img.width * scale_factor))
-            gh = max(2, int(g_img.height * scale_factor))
+            gw = max(2, int(round(g_img.width * scale_factor)))
+            gh = max(2, int(round(g_img.height * scale_factor)))
             scaled_g = g_img.resize((gw, gh), Image.LANCZOS)
 
             # Human micro-jitter
@@ -279,14 +436,14 @@ class AuthenticHandwritingEngine:
         for i, item in enumerate(char_items):
             kern = int(random.uniform(-1.5, 1.5))
             if i > 0:
-                prev_ch = char_items[i - 1]["ch"]
-                if prev_ch in [".", ",", ":", ";", "!"]:
+                prev_c = char_items[i - 1]["ch"]
+                if prev_c in [".", ",", ":", ";", "!"]:
                     kern += int(12 * scale_factor)
-                elif prev_ch in ["f", "t", "r"]:
+                elif prev_c in ["f", "t", "r"]:
                     kern -= int(2 * scale_factor)
 
             char_x = max(0, curr_x + kern)
-            bj = random.uniform(-0.75, 0.75) if jitter else 0.0
+            bj = random.uniform(-0.65, 0.65) if jitter else 0.0
             slope_dy = line_slope * char_x
             char_y = int(base_ref_y - item["above"] + slope_dy + bj)
 
@@ -357,7 +514,7 @@ def analyze_template_profile(template_path: Path, page_side: str = "left") -> Te
         right_m = int(w * 0.92)
 
     xc = int(w * 0.50)
-    strip_c = np.mean(gray[:, xc-25:xc+25], axis=1)
+    strip_c = np.mean(gray[:, xc - 25:xc + 25], axis=1)
 
     expected_spacing = max(40, int(h / 32))
     min_dist = max(30, int(expected_spacing * 0.75))
@@ -387,7 +544,7 @@ def analyze_template_profile(template_path: Path, page_side: str = "left") -> Te
         left_ys = []
         y_walk = y_curr
         for x in left_xs:
-            window = gray[max(0, y_walk-25):min(h, y_walk+25), max(0, x-15):min(w, x+15)]
+            window = gray[max(0, y_walk - 25):min(h, y_walk + 25), max(0, x - 15):min(w, x + 15)]
             y_local = np.argmin(np.mean(window, axis=1)) - 25
             y_walk += y_local
             left_ys.append(y_walk)
@@ -397,7 +554,7 @@ def analyze_template_profile(template_path: Path, page_side: str = "left") -> Te
         right_ys = []
         y_walk = y_curr
         for x in right_xs:
-            window = gray[max(0, y_walk-25):min(h, y_walk+25), max(0, x-15):min(w, x+15)]
+            window = gray[max(0, y_walk - 25):min(h, y_walk + 25), max(0, x - 15):min(w, x + 15)]
             y_local = np.argmin(np.mean(window, axis=1)) - 25
             y_walk += y_local
             right_ys.append(y_walk)
@@ -425,7 +582,6 @@ def discover_templates(templates_dir: Path) -> tuple:
     right_pages = sorted([p for p in all_files if "right" in p.name.lower()])
 
     if not left_pages and not right_pages:
-        # Fallback to any images
         if all_files:
             left_pages = [all_files[0]]
             right_pages = [all_files[1 % len(all_files)]]
@@ -452,6 +608,8 @@ def parse_args():
                         help="Path for compiled multi-page handwritten PDF")
     parser.add_argument("--r_style", type=str, default="mix", choices=["mix", "print", "hook", "cursive"],
                         help="Lowercase 'r' variation preference (mix, print, hook, cursive)")
+    parser.add_argument("--date", type=str, default="18 / 11 / 2026",
+                        help="Handwritten date string to auto-fill onto notebook Date header")
     parser.add_argument("--use_diffusion", action="store_true",
                         help="Use DiffusionPen model instead of authentic personal glyph engine")
     return parser.parse_args()
@@ -475,7 +633,8 @@ def main():
     print(f"Left Templates   : {[p.name for p in left_templates]}")
     print(f"Right Templates  : {[p.name for p in right_templates]}")
     print(f"Lowercase 'r'    : {args.r_style.upper()} (User Variations: print, hook, cursive)")
-    print(f"Ink Type         : Authentic Royal Blue Ballpoint Pen")
+    print(f"Ink Type         : Authentic Royal Blue Ballpoint Pen (Physical Multiply Blending)")
+    print(f"Date Header      : '{args.date}' (Auto-filled on printed Date line)")
     print(f"Output PDF       : {output_path}")
     print("=" * 70 + "\n")
 
@@ -507,6 +666,14 @@ def main():
     left_idx = 0
     right_idx = 0
 
+    # Calibrated coordinates for printed Date header across template photos
+    date_coords = {
+        "left_page.jpg": (920, 558, 38),
+        "left_page2.jpg": (780, 525, 48),
+        "right_page.jpg": (1270, 615, 55),
+        "right_page2.jpg": (1380, 525, 50),
+    }
+
     def switch_page(side: str):
         nonlocal left_idx, right_idx
         if side == "left":
@@ -517,14 +684,25 @@ def main():
             right_idx += 1
 
         prof = template_profiles[t_path]
-        img = Image.open(t_path).convert("RGB")
+        page_arr = np.array(Image.open(t_path).convert("RGB"))
         page_num = len(rendered_pages) + 1
         print(f"\n  >>> [Page {page_num}] Switched to {side.upper()} Notebook Page ({t_path.name})")
-        return img, prof, side
 
-    current_page, current_prof, current_side = switch_page("left")
+        # Auto-fill handwritten Date header on printed Date line
+        if args.date and t_path.name in date_coords:
+            dx, dy, d_cap_h = date_coords[t_path.name]
+            jx = dx + random.randint(-4, 4)
+            jy = dy + random.randint(-2, 2)
+            date_res = engine.render_word(args.date, target_cap_height=d_cap_h)
+            if date_res:
+                d_img, d_base = date_res
+                d_paste_y = int(jy - d_base)
+                blend_ink_onto_page(page_arr, d_img, jx, d_paste_y)
+
+        return page_arr, prof, side
+
+    current_page_arr, current_prof, current_side = switch_page("left")
     current_line_idx = 0
-    current_x = current_prof.left_margin
     total_words = 0
 
     for line_idx, line in enumerate(tqdm(content_lines, desc="Writing Document", unit="line")):
@@ -532,17 +710,17 @@ def main():
         is_bullet = line.startswith("•") or line.startswith("-") or line.startswith("*")
         is_major_heading = bool(re.match(r'^[1-9]\.\s+[A-Za-z]', line)) and len(line) < 60
         is_named_section = line.strip() in ["Allowed Items", "Disallowed Items", "Tie-Breaker Policy"]
+        is_main_title = (line_idx == 0 and "RULEBOOK" in line.upper())
         is_section_title = is_major_heading or is_named_section
 
         # 1. Orphan Section Header Prevention (Keep with Next):
         # A human writer would never write just a major section title (e.g. '3. Exam Format Structure')
-        # on the very last 1-3 lines of a page. If <= 4 lines remain, start it cleanly at the top of the next page!
-        # Normal body/bullet text belonging to the current section continues on the current page.
+        # on the very last 1-3 lines of a page. If <= 4 lines remain, start it cleanly at the top of next page!
         remaining_lines = current_prof.num_lines - current_line_idx
         if is_section_title and remaining_lines <= 4 and current_line_idx > 0:
-            rendered_pages.append(current_page)
+            rendered_pages.append(Image.fromarray(current_page_arr))
             next_side = "right" if current_side == "left" else "left"
-            current_page, current_prof, current_side = switch_page(next_side)
+            current_page_arr, current_prof, current_side = switch_page(next_side)
             current_line_idx = 0
 
         # Extra spacing before major section headings
@@ -551,21 +729,27 @@ def main():
 
         # Check page overflow before starting new item
         if current_line_idx >= current_prof.num_lines:
-            rendered_pages.append(current_page)
+            rendered_pages.append(Image.fromarray(current_page_arr))
             next_side = "right" if current_side == "left" else "left"
-            current_page, current_prof, current_side = switch_page(next_side)
+            current_page_arr, current_prof, current_side = switch_page(next_side)
             current_line_idx = 0
 
-        # Starting X for this line
+        # Starting X for this line with Organic Left Margin Drift
         indent = int(current_prof.line_spacing * 0.45) if is_bullet else 0
         if is_section_title:
-            indent = int(current_prof.line_spacing * 0.2)
-        current_x = current_prof.left_margin + indent
+            indent = int(current_prof.line_spacing * 0.20)
+
+        # Human wrist margin drift down the page (±4-8px wander)
+        margin_wander = int(math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5))
+        current_x = current_prof.left_margin + indent + margin_wander
 
         # 2. Text Hierarchy: Make text after title/colon slightly smaller (~82%)
-        # (e.g. 'Competition Name:' is normal size, 'Pseudo War' is a little smaller)
         has_colon_label = (":" in line) and (not line.isupper()) and (not is_section_title)
         is_after_colon = False
+
+        title_start_x = current_x
+        title_end_x = current_x
+        title_line_idx = current_line_idx
 
         words = line.split(" ")
         for w_idx, word in enumerate(words):
@@ -589,34 +773,47 @@ def main():
             w_img, w_base = res
             word_w = w_img.width
 
-            # Line wrap check
+            # Smart End-of-Line Margin Squeeze or Line Wrap
             if current_x + word_w > current_prof.right_margin:
-                current_line_idx += 1
-                # Check page overflow
-                if current_line_idx >= current_prof.num_lines:
-                    rendered_pages.append(current_page)
-                    next_side = "right" if current_side == "left" else "left"
-                    current_page, current_prof, current_side = switch_page(next_side)
-                    current_line_idx = 0
+                overflow = (current_x + word_w) - current_prof.right_margin
+                squeeze_factor = (current_prof.right_margin - current_x) / float(word_w)
 
-                # Wrapped line indent (align under bullet content)
-                wrap_indent = int(current_prof.line_spacing * 0.7) if is_bullet else 0
-                current_x = current_prof.left_margin + wrap_indent + random.randint(-3, 3)
+                # If word barely overflows (by <= 20%) and is short/medium length, squeeze slightly to fit
+                if 0.84 <= squeeze_factor < 1.0 and len(clean_w) <= 8 and (current_x + word_w) <= current_prof.right_margin + 60:
+                    sq_w = max(2, int(round(word_w * squeeze_factor)))
+                    w_img = w_img.resize((sq_w, w_img.height), Image.LANCZOS)
+                    word_w = sq_w
+                else:
+                    # Wrap cleanly to next line
+                    current_line_idx += 1
+                    if current_line_idx >= current_prof.num_lines:
+                        rendered_pages.append(Image.fromarray(current_page_arr))
+                        next_side = "right" if current_side == "left" else "left"
+                        current_page_arr, current_prof, current_side = switch_page(next_side)
+                        current_line_idx = 0
 
-                # Re-calculate slope and render for wrapped line position
-                local_slope = current_prof.get_line_slope(current_line_idx, int(current_x))
-                res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope)
-                if res is not None:
-                    w_img, w_base = res
-                    word_w = w_img.width
+                    # Wrapped line indent (align under bullet content)
+                    wrap_indent = int(current_prof.line_spacing * 0.70) if is_bullet else 0
+                    wrap_wander = int(math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5))
+                    current_x = current_prof.left_margin + wrap_indent + wrap_wander + random.randint(-2, 2)
+
+                    # Re-calculate slope and render for wrapped line position
+                    local_slope = current_prof.get_line_slope(current_line_idx, int(current_x))
+                    res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope)
+                    if res is not None:
+                        w_img, w_base = res
+                        word_w = w_img.width
 
             # Align word directly onto the notebook ruled line at its exact X position
             line_y = current_prof.get_line_y(current_line_idx, int(current_x))
             v_jitter = random.uniform(-0.5, 0.5)
             paste_y = int(line_y - w_base + v_jitter)
 
-            # Paste transparent word onto notebook page
-            current_page.paste(w_img, (int(current_x), paste_y), mask=w_img)
+            # Physically blend translucent royal blue ink onto notebook paper
+            blend_ink_onto_page(current_page_arr, w_img, int(current_x), paste_y)
+
+            # Track end of title words for freehand underline
+            title_end_x = int(current_x + word_w)
 
             # Advance X with natural, comfortable word spacing
             space_jitter = random.uniform(0.90, 1.25)
@@ -625,15 +822,22 @@ def main():
             current_x += word_w + space_w
             total_words += 1
 
-            # Switch to smaller size for all subsequent words in this item once colon is encountered
+            # Switch to smaller size for all subsequent words once colon is encountered
             if ":" in clean_w:
                 is_after_colon = True
+
+        # Freehand ballpoint underlines under major section headers & main document title
+        if is_section_title or is_main_title:
+            u_line_y = current_prof.get_line_y(title_line_idx, int(title_start_x))
+            u_y = u_line_y + int(current_prof.line_spacing * 0.18)
+            u_slope = current_prof.get_line_slope(title_line_idx, int(title_start_x))
+            draw_handwritten_underline(current_page_arr, title_start_x, title_end_x, u_y, slope=u_slope)
 
         # Move to next line for next paragraph/entry
         current_line_idx += 1
 
     # Append final page
-    rendered_pages.append(current_page)
+    rendered_pages.append(Image.fromarray(current_page_arr))
 
     # 6. Save individual page images and compile multi-page PDF
     print(f"\n[4/4] Compiling {len(rendered_pages)} notebook page(s) into {output_path.name}...")
