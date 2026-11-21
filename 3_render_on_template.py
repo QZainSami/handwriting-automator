@@ -6,13 +6,18 @@ Authentic Personal Handwriting & Dual-Page Notebook Compositing Pipeline:
 1. Automatically discovers input document (PDF, TXT, MD) in input_pdfs/ (e.g. assig.txt).
 2. Uses the user's authentic personal handwriting glyph library (royal blue ballpoint ink,
    custom letterforms, all 3 variations of lowercase 'r': print, hook, and cursive).
-3. Multi-variant glyph engine to prevent clone repetition of repeated letters (ee, tt, oo, ll).
+3. Multi-variant glyph engine preventing clone repetition of repeated letters (ee, tt, oo, ll, ss, aa).
 4. Physical ink-paper Multiply blending (ruled lines and paper fibers show naturally through ink).
 5. Organic left margin drift and smart end-of-line margin squeezing.
 6. Auto-filled handwritten Date headers on printed notebook template lines.
 7. Freehand organic ballpoint underlines under major section headings.
-8. Alternates seamlessly between Left and Right notebook pages (clearing spiral binding).
-9. Compiles final output into output_pages/final_handwritten.pdf and individual page images.
+8. Ballpoint micro-physics & velocity pooling at stroke vertices.
+9. Context-aware organic kerning for natural ligature pairs (th, he, in, on, st, er, an, etc.).
+10. Natural hand fatigue and progressive relaxation over pages 1 through 5.
+11. Photorealistic mobile camera optics: soft lens vignette & spiral contact ambient shadow.
+12. Handwritten corner page numbering ('Page 1', 'Page 2', etc.) in outer header margins.
+13. Authentic human touch: neat single-stroke pen correction / strike-through.
+14. Compiles final output into output_pages/final_handwritten.pdf and individual page images.
 """
 
 import os
@@ -39,6 +44,16 @@ OUTPUT_DIR = SCRIPT_DIR / "output_pages"
 CACHE_DIR = SCRIPT_DIR / ".cache"
 os.environ.setdefault("USERPROFILE", str(CACHE_DIR))
 os.environ.setdefault("HOME", str(CACHE_DIR))
+
+# Common cursive ligature pairs for natural stroke flow
+COMMON_LIGATURE_PAIRS = {
+    ("t", "h"), ("h", "e"), ("i", "n"), ("o", "n"), ("s", "t"),
+    ("e", "r"), ("a", "n"), ("c", "h"), ("o", "r"), ("e", "n"),
+    ("r", "e"), ("t", "i"), ("a", "l"), ("l", "e"), ("n", "d"),
+    ("n", "t"), ("d", "e"), ("v", "e"), ("a", "t"), ("e", "d"),
+    ("i", "s"), ("o", "u"), ("a", "r"), ("p", "a"), ("m", "a"),
+    ("q", "u"), ("e", "x"), ("o", "f")
+}
 
 
 def find_input_document(requested_path: str = None) -> Path:
@@ -99,7 +114,7 @@ def extract_content_lines(doc_path: Path) -> list:
             content = f.read()
 
         # Clean common UTF-8 encoding artifacts
-        content = content.replace("\ufeff", "").replace("â€¢", "•").replace("\r\n", "\n")
+        content = content.replace("\ufeff", "").replace("Ã¢â‚¬Â¢", "â€¢").replace("\r\n", "\n")
         raw_lines = content.split("\n")
         for raw_line in raw_lines:
             clean = raw_line.strip()
@@ -197,11 +212,158 @@ def draw_handwritten_underline(page_arr: np.ndarray, x1: int, x2: int, y: int, s
     blend_ink_onto_page(page_arr, stroke_img, min_x, min_y)
 
 
+def draw_handwritten_strikethrough(page_arr: np.ndarray, x1: int, x2: int, y: int, slope: float = 0.0):
+    """
+    Draws a neat, realistic ballpoint pen strike-through across an accidental slip-up.
+    Simulates a human student correcting an error with a single clean horizontal stroke.
+    """
+    length = x2 - x1
+    if length <= 5:
+        return
+
+    num_pts = max(10, length // 8)
+    xs = np.linspace(x1 - 3, x2 + 3, num_pts)
+    sag = random.uniform(-0.6, 0.6)
+    ys = []
+    for x in xs:
+        t = (x - (x1 - 3)) / float(length + 6)
+        slope_y = slope * (x - x1)
+        curve_y = 4.0 * sag * t * (1.0 - t)
+        jitter_y = random.uniform(-0.35, 0.35)
+        ys.append(y + slope_y + curve_y + jitter_y)
+
+    pad = 10
+    min_x, max_x = int(min(xs)) - pad, int(max(xs)) + pad
+    min_y, max_y = int(min(ys)) - pad, int(max(ys)) + pad
+    cw = max_x - min_x
+    ch = max_y - min_y
+
+    stroke_canvas = np.zeros((ch, cw, 4), dtype=np.uint8)
+    blue_ink = (32, 75, 215)
+    pts = list(zip(xs - min_x, np.array(ys) - min_y))
+    for i in range(len(pts) - 1):
+        pt1 = (int(round(pts[i][0])), int(round(pts[i][1])))
+        pt2 = (int(round(pts[i + 1][0])), int(round(pts[i + 1][1])))
+        cv2.line(stroke_canvas, pt1, pt2, (*blue_ink, 220), 2, cv2.LINE_AA)
+
+    stroke_img = Image.fromarray(stroke_canvas, mode="RGBA")
+    blend_ink_onto_page(page_arr, stroke_img, min_x, min_y)
+
+
+def apply_photorealistic_optics(page_arr: np.ndarray, page_side: str = "left") -> np.ndarray:
+    """
+    Applies physical mobile camera optics to the composited page:
+    1. Subtle radial lens vignette (soft 3.5% light falloff towards outer corners).
+    2. Soft spiral contact shadow (ambient occlusion where paper curls near spiral wire coils, ~2.5%).
+    Makes the page look 100% like a real smartphone photo taken on a desk.
+    """
+    h, w = page_arr.shape[:2]
+    page_float = page_arr.astype(np.float32)
+
+    # 1. Subtle radial lens vignette
+    yc, xc = h * 0.48, w * 0.50
+    y_grid, x_grid = np.ogrid[:h, :w]
+    dist_sq = ((x_grid - xc) / (w * 0.55)) ** 2 + ((y_grid - yc) / (h * 0.55)) ** 2
+    vignette = 1.0 - 0.038 * np.clip(dist_sq, 0.0, 1.2)
+
+    # 2. Spiral contact shadow (ambient occlusion)
+    # Left page: spiral is on the right side
+    # Right page: spiral is on the left side
+    spiral_shadow = np.ones((h, w), dtype=np.float32)
+    if page_side == "left":
+        spiral_edge = int(w * 0.88)
+        shadow_width = int(w * 0.11)
+        x_dist = np.clip((x_grid - (spiral_edge - shadow_width)), 0, shadow_width)
+        shadow_factor = 1.0 - 0.030 * (x_dist / float(shadow_width)) ** 1.5
+        spiral_shadow = np.minimum(spiral_shadow, shadow_factor)
+    else:
+        spiral_edge = int(w * 0.14)
+        shadow_width = int(w * 0.11)
+        x_dist = np.clip((spiral_edge + shadow_width - x_grid), 0, shadow_width)
+        shadow_factor = 1.0 - 0.030 * (x_dist / float(shadow_width)) ** 1.5
+        spiral_shadow = np.minimum(spiral_shadow, shadow_factor)
+
+    lighting = (vignette * spiral_shadow).astype(np.float32)
+    for c in range(3):
+        page_float[:, :, c] *= lighting
+
+    return np.clip(page_float, 0, 255).astype(np.uint8)
+
+
+def draw_page_number(page_arr: np.ndarray, engine, page_num: int, page_side: str, t_name: str):
+    """
+    Draws an authentic handwritten page number ('Page 1', 'Page 2', etc.) in the outer header corner.
+    """
+    page_text = f"Page {page_num}"
+    header_coords = {
+        "left_page.jpg": (280, 520, 40),
+        "left_page2.jpg": (240, 500, 42),
+        "right_page.jpg": (4700, 580, 44),
+        "right_page2.jpg": (4400, 475, 42),
+    }
+
+    if t_name in header_coords:
+        hx, hy, h_cap_h = header_coords[t_name]
+    else:
+        h, w = page_arr.shape[:2]
+        hx = int(w * 0.08) if page_side == "left" else int(w * 0.88)
+        hy = int(h * 0.08)
+        h_cap_h = 38
+
+    jx = hx + random.randint(-4, 4)
+    jy = hy + random.randint(-2, 2)
+    res = engine.render_word(page_text, target_cap_height=h_cap_h)
+    if res:
+        p_img, p_base = res
+        paste_y = int(jy - p_base)
+        blend_ink_onto_page(page_arr, p_img, jx, paste_y)
+
+
+def apply_ballpoint_micro_physics(word_img: Image.Image) -> Image.Image:
+    """
+    Simulates real ballpoint pen ink mechanics:
+    1. Subtle rolling-ball micro-texture across paper fibers.
+    2. Micro-pooling at stroke turnarounds / direction vertices.
+    """
+    arr = np.array(word_img)
+    h, w = arr.shape[:2]
+    alpha = arr[:, :, 3]
+    if not np.any(alpha > 40):
+        return word_img
+
+    # 1. Micro-texture
+    tex = np.random.uniform(0.96, 1.04, (h, w)).astype(np.float32)
+    tex = cv2.GaussianBlur(tex, (3, 3), 0.6)
+    rgb = arr[:, :, :3].astype(np.float32)
+    for c in range(3):
+        rgb[:, :, c] = np.clip(rgb[:, :, c] * tex, 0, 255)
+    arr[:, :, :3] = rgb.astype(np.uint8)
+
+    # 2. Micro-pooling at stroke vertices
+    bin_mask = (alpha > 80).astype(np.uint8)
+    corners = cv2.goodFeaturesToTrack(bin_mask, maxCorners=4, qualityLevel=0.35, minDistance=8)
+    if corners is not None:
+        pool_overlay = np.zeros((h, w, 4), dtype=np.uint8)
+        for pt in corners:
+            cx, cy = int(pt[0][0]), int(pt[0][1])
+            if 0 <= cy < h and 0 <= cx < w and alpha[cy, cx] > 60:
+                cv2.circle(pool_overlay, (cx, cy), 1, (16, 42, 135, 55), -1)
+
+        ov_a = pool_overlay[:, :, 3:4].astype(float) / 255.0
+        ov_rgb = pool_overlay[:, :, :3].astype(float)
+        cur_rgb = arr[:, :, :3].astype(float)
+        blended_rgb = cur_rgb * (1.0 - ov_a) + ov_rgb * ov_a
+        arr[:, :, :3] = np.clip(blended_rgb, 0, 255).astype(np.uint8)
+        arr[:, :, 3] = np.clip(arr[:, :, 3].astype(float) + pool_overlay[:, :, 3].astype(float) * 0.25, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(arr)
+
+
 class AuthenticHandwritingEngine:
     """
     Personal handwriting generation engine using authentic royal blue ballpoint pen glyphs
     extracted directly from the user's handwriting specimen.
-    Supports multi-variant selection to prevent identical cloned letters (ee, tt, oo, ll).
+    Supports multi-variant selection to prevent identical cloned letters (ee, tt, oo, ll, ss, aa).
     """
     def __init__(self, glyph_base_dir: Path = GLYPH_DIR, r_mode: str = "mix"):
         self.glyph_base_dir = Path(glyph_base_dir)
@@ -321,7 +483,16 @@ class AuthenticHandwritingEngine:
 
         # Multiple physical variants available on disk
         last_idx = self.last_used_indices[key]
-        next_idx = (last_idx + 1) % len(glyph_list)
+        if is_repeated:
+            # Strictly pick a DIFFERENT variant for immediate double letters (ee, tt, oo, ll, ss)
+            choices = [i for i in range(len(glyph_list)) if i != last_idx]
+            next_idx = random.choice(choices) if choices else 0
+        else:
+            # Varied selection with natural rotation
+            choices = list(range(len(glyph_list)))
+            weights = [0.20 if i == last_idx else 0.80 / (len(glyph_list) - 1) for i in range(len(glyph_list))]
+            next_idx = random.choices(choices, weights=weights, k=1)[0]
+
         self.last_used_indices[key] = next_idx
         return glyph_list[next_idx]
 
@@ -370,10 +541,12 @@ class AuthenticHandwritingEngine:
 
         return None, 0.0, 0.0
 
-    def render_word(self, word: str, target_cap_height: int = 110, line_slope: float = 0.0, jitter: bool = True) -> tuple:
+    def render_word(self, word: str, target_cap_height: int = 110, line_slope: float = 0.0,
+                    jitter: bool = True, fatigue_slant: float = 0.0) -> tuple:
         """
         Renders a single handwritten word with authentic glyphs and natural handwriting flow.
         Follows local notebook line slope so every character sits flush on the ruled line.
+        Includes ballpoint micro-physics and context-aware organic ligatures.
         Returns (PIL.Image RGBA, baseline_y_at_start).
         """
         if not word:
@@ -401,10 +574,13 @@ class AuthenticHandwritingEngine:
             gh = max(2, int(round(g_img.height * scale_factor)))
             scaled_g = g_img.resize((gw, gh), Image.LANCZOS)
 
-            # Human micro-jitter
+            # Human micro-jitter + progressive hand fatigue slant
+            total_rot = fatigue_slant
             if jitter:
-                rot = random.uniform(-0.35, 0.35)
-                scaled_g = scaled_g.rotate(rot, resample=Image.BICUBIC, expand=True)
+                total_rot += random.uniform(-0.35, 0.35)
+
+            if abs(total_rot) > 0.08:
+                scaled_g = scaled_g.rotate(total_rot, resample=Image.BICUBIC, expand=True)
                 gw, gh = scaled_g.size
 
             descender_px = int(gh * desc_ratio)
@@ -441,6 +617,9 @@ class AuthenticHandwritingEngine:
                     kern += int(12 * scale_factor)
                 elif prev_c in ["f", "t", "r"]:
                     kern -= int(2 * scale_factor)
+                elif (prev_c.lower(), item["ch"].lower()) in COMMON_LIGATURE_PAIRS:
+                    # Organic cursive ligature connection: kiss adjacent letter strokes
+                    kern -= int(3.0 * scale_factor)
 
             char_x = max(0, curr_x + kern)
             bj = random.uniform(-0.65, 0.65) if jitter else 0.0
@@ -461,6 +640,9 @@ class AuthenticHandwritingEngine:
         word_img = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
         for g_img, cx, cy in placements:
             word_img.paste(g_img, (cx, cy + y_pad), g_img)
+
+        # Apply ballpoint ink micro-physics (micro-texture and turnaround pooling)
+        word_img = apply_ballpoint_micro_physics(word_img)
 
         # Baseline position at the word's initial X coordinate (char_x = 0)
         baseline_y = base_ref_y + y_pad
@@ -610,6 +792,14 @@ def parse_args():
                         help="Lowercase 'r' variation preference (mix, print, hook, cursive)")
     parser.add_argument("--date", type=str, default="18 / 11 / 2026",
                         help="Handwritten date string to auto-fill onto notebook Date header")
+    parser.add_argument("--no_page_numbers", action="store_true",
+                        help="Disable handwritten corner page numbering")
+    parser.add_argument("--no_optics", action="store_true",
+                        help="Disable mobile camera lens vignette and spiral contact ambient shadow")
+    parser.add_argument("--no_fatigue", action="store_true",
+                        help="Disable natural handwriting fatigue progression across pages")
+    parser.add_argument("--no_correction", action="store_true",
+                        help="Disable authentic human neat strike-through correction")
     parser.add_argument("--use_diffusion", action="store_true",
                         help="Use DiffusionPen model instead of authentic personal glyph engine")
     return parser.parse_args()
@@ -635,6 +825,10 @@ def main():
     print(f"Lowercase 'r'    : {args.r_style.upper()} (User Variations: print, hook, cursive)")
     print(f"Ink Type         : Authentic Royal Blue Ballpoint Pen (Physical Multiply Blending)")
     print(f"Date Header      : '{args.date}' (Auto-filled on printed Date line)")
+    print(f"Corner Numbers   : {'Disabled' if args.no_page_numbers else 'Enabled (Page 1, Page 2, ...)'}")
+    print(f"Mobile Optics    : {'Disabled' if args.no_optics else 'Enabled (Lens Vignette + Spiral Ambient Shadow)'}")
+    print(f"Hand Fatigue     : {'Disabled' if args.no_fatigue else 'Enabled (Progressive Slant & Space Relaxation)'}")
+    print(f"Human Correction : {'Disabled' if args.no_correction else 'Enabled (Authentic Ballpoint Strike-Through)'}")
     print(f"Output PDF       : {output_path}")
     print("=" * 70 + "\n")
 
@@ -671,7 +865,7 @@ def main():
         "left_page.jpg": (920, 558, 38),
         "left_page2.jpg": (780, 525, 48),
         "right_page.jpg": (1270, 615, 55),
-        "right_page2.jpg": (1380, 525, 50),
+        "right_page2.jpg": (1420, 485, 44),
     }
 
     def switch_page(side: str):
@@ -699,13 +893,30 @@ def main():
                 d_paste_y = int(jy - d_base)
                 blend_ink_onto_page(page_arr, d_img, jx, d_paste_y)
 
+        # Handwritten corner page numbering
+        if not args.no_page_numbers:
+            draw_page_number(page_arr, engine, page_num=page_num, page_side=side, t_name=t_path.name)
+
         return page_arr, prof, side
+
+    def finalize_page(page_arr: np.ndarray, page_side: str) -> Image.Image:
+        if not args.no_optics:
+            page_arr = apply_photorealistic_optics(page_arr, page_side=page_side)
+        return Image.fromarray(page_arr)
 
     current_page_arr, current_prof, current_side = switch_page("left")
     current_line_idx = 0
     total_words = 0
+    correction_done = False
+    total_est_pages = 5
 
     for line_idx, line in enumerate(tqdm(content_lines, desc="Writing Document", unit="line")):
+        # Calculate natural page fatigue progression
+        page_progress = min(1.0, len(rendered_pages) / float(max(1, total_est_pages - 1)))
+        page_slant = 0.0 if args.no_fatigue else (page_progress * 0.70)  # 0.0 to 0.70 deg forward drift
+        fatigue_spacing_factor = 1.0 if args.no_fatigue else (1.0 + page_progress * 0.045)
+        fatigue_wander_scale = 1.0 if args.no_fatigue else (1.0 + page_progress * 0.30)
+
         # Check if line is a bullet item or section title
         is_bullet = line.startswith("•") or line.startswith("-") or line.startswith("*")
         is_major_heading = bool(re.match(r'^[1-9]\.\s+[A-Za-z]', line)) and len(line) < 60
@@ -714,11 +925,9 @@ def main():
         is_section_title = is_major_heading or is_named_section
 
         # 1. Orphan Section Header Prevention (Keep with Next):
-        # A human writer would never write just a major section title (e.g. '3. Exam Format Structure')
-        # on the very last 1-3 lines of a page. If <= 4 lines remain, start it cleanly at the top of next page!
         remaining_lines = current_prof.num_lines - current_line_idx
         if is_section_title and remaining_lines <= 4 and current_line_idx > 0:
-            rendered_pages.append(Image.fromarray(current_page_arr))
+            rendered_pages.append(finalize_page(current_page_arr, current_side))
             next_side = "right" if current_side == "left" else "left"
             current_page_arr, current_prof, current_side = switch_page(next_side)
             current_line_idx = 0
@@ -729,7 +938,7 @@ def main():
 
         # Check page overflow before starting new item
         if current_line_idx >= current_prof.num_lines:
-            rendered_pages.append(Image.fromarray(current_page_arr))
+            rendered_pages.append(finalize_page(current_page_arr, current_side))
             next_side = "right" if current_side == "left" else "left"
             current_page_arr, current_prof, current_side = switch_page(next_side)
             current_line_idx = 0
@@ -740,7 +949,7 @@ def main():
             indent = int(current_prof.line_spacing * 0.20)
 
         # Human wrist margin drift down the page (±4-8px wander)
-        margin_wander = int(math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5))
+        margin_wander = int((math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5)) * fatigue_wander_scale)
         current_x = current_prof.left_margin + indent + margin_wander
 
         # 2. Text Hierarchy: Make text after title/colon slightly smaller (~82%)
@@ -766,8 +975,22 @@ def main():
             # Calculate local line slope at current_x
             local_slope = current_prof.get_line_slope(current_line_idx, int(current_x))
 
+            # Authentic human slip-up / strike-through correction (on Page 3 under Zero Tolerance)
+            if not args.no_correction and not correction_done and len(rendered_pages) >= 2 and clean_w.lower() == "cheat,":
+                res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope, fatigue_slant=page_slant)
+                if res is not None:
+                    w_img, w_base = res
+                    line_y = current_prof.get_line_y(current_line_idx, int(current_x))
+                    paste_y = int(line_y - w_base)
+                    blend_ink_onto_page(current_page_arr, w_img, int(current_x), paste_y)
+                    strike_y = int(line_y - w_base + w_img.height * 0.58)
+                    draw_handwritten_strikethrough(current_page_arr, int(current_x), int(current_x + w_img.width), strike_y, slope=local_slope)
+                    current_x += w_img.width + int(12 * (word_cap_h / 80.0))
+                    correction_done = True
+                    continue
+
             # Render handwritten word with authentic glyphs following local line slope
-            res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope)
+            res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope, fatigue_slant=page_slant)
             if res is None:
                 continue
             w_img, w_base = res
@@ -787,19 +1010,19 @@ def main():
                     # Wrap cleanly to next line
                     current_line_idx += 1
                     if current_line_idx >= current_prof.num_lines:
-                        rendered_pages.append(Image.fromarray(current_page_arr))
+                        rendered_pages.append(finalize_page(current_page_arr, current_side))
                         next_side = "right" if current_side == "left" else "left"
                         current_page_arr, current_prof, current_side = switch_page(next_side)
                         current_line_idx = 0
 
                     # Wrapped line indent (align under bullet content)
                     wrap_indent = int(current_prof.line_spacing * 0.70) if is_bullet else 0
-                    wrap_wander = int(math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5))
+                    wrap_wander = int((math.sin(current_line_idx * 0.38 + len(rendered_pages) * 1.5) * 7.5 + random.uniform(-2.5, 2.5)) * fatigue_wander_scale)
                     current_x = current_prof.left_margin + wrap_indent + wrap_wander + random.randint(-2, 2)
 
                     # Re-calculate slope and render for wrapped line position
                     local_slope = current_prof.get_line_slope(current_line_idx, int(current_x))
-                    res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope)
+                    res = engine.render_word(clean_w, target_cap_height=word_cap_h, line_slope=local_slope, fatigue_slant=page_slant)
                     if res is not None:
                         w_img, w_base = res
                         word_w = w_img.width
@@ -815,10 +1038,10 @@ def main():
             # Track end of title words for freehand underline
             title_end_x = int(current_x + word_w)
 
-            # Advance X with natural, comfortable word spacing
+            # Advance X with natural, comfortable word spacing (with slight fatigue loosening)
             space_jitter = random.uniform(0.90, 1.25)
             char_w = max(10, word_w // max(1, len(clean_w)))
-            space_w = int(char_w * 1.35 * space_jitter)
+            space_w = int(char_w * 1.35 * space_jitter * fatigue_spacing_factor)
             current_x += word_w + space_w
             total_words += 1
 
@@ -837,7 +1060,7 @@ def main():
         current_line_idx += 1
 
     # Append final page
-    rendered_pages.append(Image.fromarray(current_page_arr))
+    rendered_pages.append(finalize_page(current_page_arr, current_side))
 
     # 6. Save individual page images and compile multi-page PDF
     print(f"\n[4/4] Compiling {len(rendered_pages)} notebook page(s) into {output_path.name}...")
